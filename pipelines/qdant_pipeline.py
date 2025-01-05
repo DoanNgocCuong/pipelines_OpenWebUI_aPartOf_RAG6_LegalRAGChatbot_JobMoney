@@ -8,14 +8,14 @@ description: A pipeline for retrieving relevant information from Qdrant using th
 """
 
 from haystack import Pipeline as HaystackPipeline
-from haystack.components.embedders import SentenceTransformersDocumentEmbedder, SentenceTransformersTextEmbedder
+from haystack.components.embedders import SentenceTransformersEmbedder
 from haystack.components.retrievers import InMemoryEmbeddingRetriever
 from haystack.components.builders import PromptBuilder
-from haystack.components.llms import OpenAIGenerator
-from haystack.dataclasses import Document
-from qdrant_client import QdrantClient
+from haystack.components.generators import OpenAIGenerator
 from typing import List, Union, Generator, Iterator
 import asyncio
+
+__all__ = ['Pipeline']
 
 class Pipeline:
     def __init__(self):
@@ -23,20 +23,19 @@ class Pipeline:
         self._initialized = False
 
     async def on_startup(self):
-        # Initialize Qdrant client
-        self.qdrant_client = QdrantClient("localhost", port=6333)
-        
         # Initialize components
-        text_embedder = SentenceTransformersTextEmbedder(model="sentence-transformers/all-MiniLM-L6-v2")
-        document_embedder = SentenceTransformersDocumentEmbedder(model="sentence-transformers/all-MiniLM-L6-v2")
+        text_embedder = SentenceTransformersEmbedder(
+            model="sentence-transformers/all-MiniLM-L6-v2"
+        )
         retriever = InMemoryEmbeddingRetriever()
-        prompt_builder = PromptBuilder(template="Given the context: {documents}, answer the question: {question}")
+        prompt_builder = PromptBuilder(
+            template="Given the context: {documents}, answer the question: {question}"
+        )
         llm = OpenAIGenerator()
 
         # Create pipeline
         self.basic_rag_pipeline = HaystackPipeline()
         self.basic_rag_pipeline.add_component("text_embedder", text_embedder)
-        self.basic_rag_pipeline.add_component("document_embedder", document_embedder)
         self.basic_rag_pipeline.add_component("retriever", retriever)
         self.basic_rag_pipeline.add_component("prompt_builder", prompt_builder)
         self.basic_rag_pipeline.add_component("llm", llm)
