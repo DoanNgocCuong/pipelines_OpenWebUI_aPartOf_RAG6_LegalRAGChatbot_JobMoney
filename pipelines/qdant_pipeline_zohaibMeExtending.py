@@ -21,11 +21,11 @@ load_dotenv()
 class Pipeline:
     class Valves(BaseModel):
         """Configuration for Qdrant Pipeline"""
-            "arbitrary_types_allowed": True
-        }
-        
-        pipelines: List[str] = []  # Connected pipelines
-        priority: int = 0  # Pipeline priority
+        QDRANT_API_URL: str = os.getenv("QDRANT_API_URL", "<key trực tiếp>")
+        QDRANT_API_KEY: str = os.getenv("QDRANT_API_KEY", "<key trực tiếp>")
+        QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "<key trực tiếp>")
+        HUGGINGFACE_API_KEY: str = os.getenv("HUGGINGFACE_API_KEY", "<key trực tiếp>")
+        EMBEDDINGS_MODEL_NAME: str = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
 
     def __init__(self):
         self.name = "Qdrant RAG Pipeline"
