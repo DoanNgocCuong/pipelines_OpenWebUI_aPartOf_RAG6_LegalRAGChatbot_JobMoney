@@ -12,21 +12,36 @@ import os
 import requests
 from typing import List, Union, Generator, Iterator
 from pydantic import BaseModel
+from langchain.embeddings import HuggingFaceInferenceAPIEmbeddings
 
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
 
 class Pipeline:
     class Valves(BaseModel):
         QDRANT_API_URL: str
         QDRANT_API_KEY: str
         QDRANT_COLLECTION: str
+        HUGGINGFACE_API_KEY: str
+        EMBEDDINGS_MODEL_NAME: str
 
     def __init__(self):
         self.valves = self.Valves(
             **{
-                "QDRANT_API_URL": os.getenv("QDRANT_API_URL", "https://fcbf96b5-0f95-47b1-b088-dd1eba2a2758.us-east4-0.gcp.cloud.qdrant.io:6333"),
-                "QDRANT_API_KEY": os.getenv("QDRANT_API_KEY", "WbQ_8KeZKchBfQ-atnt5zfbkIShw6slMNvF0PK8qIOEIgaYqTyZLmw"),
-                "QDRANT_COLLECTION": os.getenv("QDRANT_COLLECTION", "cmc_final_db"),
+                "QDRANT_API_URL": os.getenv("QDRANT_API_URL", "https://your-qdrant-url"),
+                "QDRANT_API_KEY": os.getenv("QDRANT_API_KEY", "your-qdrant-api-key"),
+                "QDRANT_COLLECTION": os.getenv("QDRANT_COLLECTION", "your-collection-name"),
+                "HUGGINGFACE_API_KEY": os.getenv("HUGGINGFACE_API_KEY", "your-huggingface-api-key"),
+                "EMBEDDINGS_MODEL_NAME": os.getenv("EMBEDDINGS_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"),
             }
+        )
+
+        # Initialize Hugging Face embeddings
+        self.embeddings = HuggingFaceInferenceAPIEmbeddings(
+            model_name=self.valves.EMBEDDINGS_MODEL_NAME,
+            api_key=self.valves.HUGGINGFACE_API_KEY,
+            model_kwargs={'device': 'auto'}
         )
 
     async def on_startup(self):
@@ -34,6 +49,15 @@ class Pipeline:
 
     async def on_shutdown(self):
         print("Qdrant Cloud Pipeline stopped.")
+
+    def generate_embedding(self, query_text: str) -> List[float]:
+        """
+        Generate embedding vector for a given query text using Hugging Face API.
+        """
+        print("Generating embedding for query...")
+        embedding_vector = self.embeddings.embed_query(query_text)
+        print(f"Generated embedding: {embedding_vector[:5]}...")  # Log first 5 values
+        return embedding_vector
 
     def search_vectors(self, query_vector: List[float], top_k: int = 5) -> dict:
         """
@@ -50,6 +74,7 @@ class Pipeline:
         }
 
         try:
+            print("Testing Qdrant search...")
             response = requests.post(url, json=payload, headers=headers)
             response.raise_for_status()
             return response.json()  # Assuming API returns JSON
@@ -65,8 +90,8 @@ class Pipeline:
         """
         print(f"User message: {user_message}")
 
-        # Convert the user message to a query vector (dummy example, replace with real embedding logic)
-        query_vector = [0.1, 0.2, 0.3, 0.4, 0.5]  # Replace with embedding generation logic
+        # Generate embedding vector
+        query_vector = self.generate_embedding(user_message)
 
         # Search in Qdrant
         qdrant_response = self.search_vectors(query_vector)
@@ -82,3 +107,10 @@ class Pipeline:
 
         formatted_results = "\n".join([f"- ID: {item['id']}, Score: {item['score']}" for item in results])
         return f"Here are the top results from Qdrant Cloud:\n\n{formatted_results}"
+
+# Example usage
+if __name__ == "__main__":
+    pipeline = Pipeline()
+    user_query = "Find information about deep learning and AI models."
+    results = pipeline.pipe(user_query, model_id="test-model", messages=[], body={})
+    print(results)
