@@ -1,21 +1,18 @@
 """
-title: Qdrant Vector Search Pipeline
-author: Zohaib
-date: 2025-01-10
+title: Qdrant RAG Pipeline
+author: your_name
+date: 2024-01-10
 version: 1.0
 license: MIT
-description: Pipeline for semantic search using Qdrant Cloud
-requirements: requests, python-dotenv, llama-index, langchain, langchain-community, qdrant-client
-environment_variables: QDRANT_API_URL, QDRANT_API_KEY, QDRANT_COLLECTION, HUGGINGFACE_API_KEY
+description: A pipeline for retrieving relevant information from Qdrant vector database
+requirements: qdrant-client, langchain, langchain-community, python-dotenv
 """
 
-import os
-import json
-import asyncio
-from typing import List, Union, Optional, Generator, Iterator
+from typing import List, Union, Generator, Iterator
 from pydantic import BaseModel
-from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
+import os
 from dotenv import load_dotenv
+from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 from qdrant_client import QdrantClient
 import requests
 
@@ -23,7 +20,7 @@ load_dotenv()
 
 class Pipeline:
     class Valves(BaseModel):
-        model_config = {
+        """Configuration for Qdrant Pipeline"""
             "arbitrary_types_allowed": True
         }
         
@@ -31,16 +28,15 @@ class Pipeline:
         priority: int = 0  # Pipeline priority
 
     def __init__(self):
-        self.type = "filter"  # or "manifold" for provider
-        self.name = "Qdrant Vector Search"
+        self.name = "Qdrant RAG Pipeline"
+        self.embeddings = None
+        self.qdrant_client = None
         self.valves = self.Valves()
-        self._initialize_clients()
 
-    def _initialize_clients(self):
+    async def on_startup(self):
+        """Initialize connections on startup"""
         try:
-            print("Initializing Pipeline...")
-            print(f"Using Qdrant URL: {self.valves.QDRANT_API_URL}")
-            print(f"Using Collection: {self.valves.QDRANT_COLLECTION}")
+            print(f"Starting {self.name}...")
             
             # Initialize embeddings
             self.embeddings = HuggingFaceInferenceAPIEmbeddings(
@@ -53,175 +49,75 @@ class Pipeline:
             self.qdrant_client = QdrantClient(
                 url=self.valves.QDRANT_API_URL,
                 api_key=self.valves.QDRANT_API_KEY,
-                timeout=10  # Add timeout
+                timeout=10
             )
             print("Qdrant client initialized")
 
-            # Check collection
+            # Verify collection
             collection_info = self.qdrant_client.get_collection(
                 collection_name=self.valves.QDRANT_COLLECTION
             )
-            vector_size = collection_info.config.params.vectors.size
-            print(f"Collection vector size: {vector_size}")
-            
-            if vector_size != 768:
-                raise ValueError(f"Collection vector size mismatch: expected 768, got {vector_size}")
+            print(f"Connected to collection: {self.valves.QDRANT_COLLECTION}")
+            print(f"Vector size: {collection_info.config.params.vectors.size}")
 
-            print("Successfully connected to Qdrant")
-            print("Pipeline initialized successfully")
-            
         except Exception as e:
-            print(f"Detailed error in initialization: {str(e)}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
+            print(f"Startup error: {str(e)}")
             raise
 
-    async def on_startup(self):
-        print(f"Starting {self.name} pipeline...")
-        self._initialize_clients()
-
     async def on_shutdown(self):
-        print(f"Shutting down {self.name} pipeline...")
-        if hasattr(self, 'qdrant_client'):
+        """Cleanup on shutdown"""
+        if self.qdrant_client:
             self.qdrant_client.close()
 
-    async def on_valves_updated(self):
-        print("Valves configuration updated")
-        self._initialize_clients()
-
-    async def inlet(self, body: dict, user: Optional[dict] = None) -> dict:
-        """Pre-process incoming messages"""
-        try:
-            if "messages" in body:
-                last_message = body["messages"][-1]["content"]
-                vector = self.generate_embedding(last_message)
-                body["vector"] = vector
-            return body
-        except Exception as e:
-            print(f"Inlet error: {e}")
-            return body
-
-    async def outlet(self, body: dict, user: Optional[dict] = None) -> dict:
-        """Post-process outgoing messages"""
-        return body
-
-    def generate_embedding(self, query_text: str) -> List[float]:
-        """Generate embedding vector"""
-        try:
-            print(f"Generating embedding for text: {query_text[:100]}...")
-            embedding_vector = self.embeddings.embed_query(query_text)
-            print(f"Generated vector dimension: {len(embedding_vector)}")
-            print(f"First few values: {embedding_vector[:5]}")
-            return embedding_vector
-            
-        except Exception as e:
-            print(f"Error generating embedding: {str(e)}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
-            return []
-
     def search_vectors(self, query_vector: List[float], top_k: int = 5) -> dict:
-        """Search Qdrant collection with 768-dimensional vectors"""
+        """Search Qdrant collection"""
         try:
-            # Debug info
-            print(f"Vector dimension: {len(query_vector)}")
-            print(f"First few values: {query_vector[:5]}")
-            
-            # Construct URL and headers directly
             url = f"{self.valves.QDRANT_API_URL}/collections/{self.valves.QDRANT_COLLECTION}/points/search"
             headers = {
                 "Authorization": f"Bearer {self.valves.QDRANT_API_KEY}",
                 "Content-Type": "application/json",
             }
-            
-            # Construct payload
             payload = {
                 "vector": query_vector,
                 "limit": top_k,
             }
             
-            print("Sending request to Qdrant...")
-            print(f"URL: {url}")
-            print(f"Payload size: {len(str(payload))}")
-            
-            # Use requests instead of qdrant_client
             response = requests.post(url, json=payload, headers=headers)
             response.raise_for_status()
             
-            print(f"Response Status: {response.status_code}")
-            results = response.json()
-            print(f"Got {len(results.get('result', []))} results")
+            return {"result": response.json().get("result", [])}
             
-            return {"result": results.get("result", [])}
-            
-        except requests.exceptions.HTTPError as e:
-            print(f"HTTP Error: {e.response.status_code} {e.response.text}")
-            return {"error": str(e)}
         except Exception as e:
-            print(f"Error in search_vectors: {str(e)}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
+            print(f"Search error: {str(e)}")
             return {"error": str(e)}
 
-    def _format_results(self, matches: list) -> str:
-        """Format search results for display"""
-        results = []
-        for idx, match in enumerate(matches, 1):
-            # Adapt to raw API response format
-            score = match.get("score", 0)
-            payload = match.get("payload", {})
-            content = payload.get("content", "No content")
-            results.append(f"{idx}. [Score: {score:.2f}] {content}")
-        return "\n\n".join(results)
-
-    def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, dict]:
-        """Main pipeline processing"""
+    def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, Generator, Iterator]:
+        """Process user message and return relevant context"""
         try:
-            print(f"Processing message: {user_message}")
+            print(f"Processing: {user_message}")
             
             # Generate embedding
-            query_vector = self.generate_embedding(user_message)
-            if not query_vector:
-                return {"response": "Failed to generate embedding"}
-
-            # Search vectors
+            query_vector = self.embeddings.embed_query(user_message)
+            
+            # Search Qdrant
             results = self.search_vectors(query_vector)
             if "error" in results:
-                return {"response": f"Search error: {results['error']}"}
+                return f"Search error: {results['error']}"
 
             # Format results
             matches = results.get("result", [])
             if not matches:
-                return {"response": "No relevant results found"}
+                return "No relevant information found"
 
-            # Format response for UI display
-            formatted_response = {
-                "response": self._format_results(matches),
-                "matches": [match.dict() for match in matches],
-                "total": len(matches)
-            }
-            
-            print(f"Returning response: {formatted_response}")
-            return formatted_response
-            
+            # Format context
+            context = []
+            for idx, match in enumerate(matches, 1):
+                score = match.get("score", 0)
+                content = match.get("payload", {}).get("content", "No content")
+                context.append(f"{idx}. [Score: {score:.2f}] {content}")
+
+            return "\n\n".join(context)
+
         except Exception as e:
             print(f"Pipeline error: {str(e)}")
-            return {"response": f"Error: {str(e)}"}
-
-    def _check_collection(self):
-        """Verify collection exists and check vector configuration"""
-        try:
-            collection_info = self.qdrant_client.get_collection(
-                collection_name=self.valves.QDRANT_COLLECTION
-            )
-            vector_size = collection_info.config.params.vectors.size
-            print(f"Collection vector size: {vector_size}")
-            
-            if vector_size != 768:
-                print(f"Warning: Collection expects {vector_size}-dimensional vectors")
-                return False
-            
-            return True
-        except Exception as e:
-            print(f"Error checking collection: {e}")
-            return False
+            return f"Error: {str(e)}"
