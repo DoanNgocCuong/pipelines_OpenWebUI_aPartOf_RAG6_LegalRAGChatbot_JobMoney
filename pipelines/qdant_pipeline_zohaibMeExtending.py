@@ -66,9 +66,10 @@ class Pipeline:
                 collection_name=self.valves.QDRANT_COLLECTION,
                 limit=1
             )
-            if points and points[0]:
-                print("Sample point payload:", points[0].payload)
-                print("Sample point vector:", len(points[0].vector))
+            if points and len(points[0]) > 0:  # points[0] là tuple (records, next_page_offset)
+                first_point = points[0][0]  # Lấy record đầu tiên
+                print("Sample point payload:", first_point.payload)
+                print("Sample point vector:", len(first_point.vector))
 
         except Exception as e:
             print(f"Startup error: {str(e)}")
@@ -143,10 +144,8 @@ class Pipeline:
                 
                 # Thử các key khác nhau
                 content = (
-                    payload.get("content") or 
-                    payload.get("text") or 
-                    payload.get("document") or 
-                    "No content"
+                    match.get("payload", {}).get("page_content") or 
+                    "No content cuong"
                 )
                 
                 if score > 0.5:  # Chỉ lấy kết quả có score cao
@@ -176,9 +175,10 @@ class Pipeline:
                             score = float(match.get("score", 0))
                             payload = match.get("payload", {})
                             content = (
-                                payload.get("content") or 
-                                payload.get("text") or 
-                                payload.get("document") or 
+                                payload.get("page_content") or 
+                                payload.get("payload", {}).get("content") or 
+                                payload.get("payload", {}).get("text") or 
+                                payload.get("payload", {}).get("document") or 
                                 "No content"
                             )
                             if score > 0.5:
@@ -198,3 +198,4 @@ class Pipeline:
     async def outlet(self, body: dict, user: Optional[dict] = None) -> dict:
         """Post-process outgoing messages"""
         return body
+
