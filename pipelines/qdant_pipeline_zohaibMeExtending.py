@@ -8,13 +8,14 @@ description: A pipeline for retrieving relevant information from Qdrant vector d
 requirements: qdrant-client, langchain, langchain-community, python-dotenv
 """
 
-from typing import List, Union, Generator, Iterator
+from typing import List, Union, Generator, Iterator, Optional
 from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
 from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 from qdrant_client import QdrantClient
 import requests
+import json
 
 load_dotenv()
 
@@ -60,6 +61,15 @@ class Pipeline:
             print(f"Connected to collection: {self.valves.QDRANT_COLLECTION}")
             print(f"Vector size: {collection_info.config.params.vectors.size}")
 
+            # Kiểm tra sample point
+            points = self.qdrant_client.scroll(
+                collection_name=self.valves.QDRANT_COLLECTION,
+                limit=1
+            )
+            if points and points[0]:
+                print("Sample point payload:", points[0].payload)
+                print("Sample point vector:", len(points[0].vector))
+
         except Exception as e:
             print(f"Startup error: {str(e)}")
             raise
@@ -72,17 +82,28 @@ class Pipeline:
     def search_vectors(self, query_vector: List[float], top_k: int = 5) -> dict:
         """Search Qdrant collection"""
         try:
-            url = f"{self.valves.QDRANT_API_URL}/collections/{self.valves.QDRANT_COLLECTION}/points/search"
-            headers = {
-                "Authorization": f"Bearer {self.valves.QDRANT_API_KEY}",
-                "Content-Type": "application/json",
-            }
+            # Encode payload as UTF-8
             payload = {
                 "vector": query_vector,
                 "limit": top_k,
+                "with_payload": True,
+                "score_threshold": 0.5
             }
             
-            response = requests.post(url, json=payload, headers=headers)
+            url = f"{self.valves.QDRANT_API_URL}/collections/{self.valves.QDRANT_COLLECTION}/points/search"
+            headers = {
+                "Authorization": f"Bearer {self.valves.QDRANT_API_KEY}",
+                "Content-Type": "application/json; charset=utf-8",
+            }
+            
+            # Encode JSON với ensure_ascii=False
+            json_data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+            
+            response = requests.post(
+                url, 
+                data=json_data,
+                headers=headers
+            )
             response.raise_for_status()
             
             return {"result": response.json().get("result", [])}
@@ -109,15 +130,71 @@ class Pipeline:
             if not matches:
                 return "No relevant information found"
 
-            # Format context
+            # Debug response
+            print(f"Raw matches: {matches}")
+            
             context = []
             for idx, match in enumerate(matches, 1):
-                score = match.get("score", 0)
-                content = match.get("payload", {}).get("content", "No content")
-                context.append(f"{idx}. [Score: {score:.2f}] {content}")
+                # Kiểm tra cấu trúc payload
+                print(f"Match {idx} payload: {match}")
+                
+                score = float(match.get("score", 0))
+                payload = match.get("payload", {})
+                
+                # Thử các key khác nhau
+                content = (
+                    payload.get("content") or 
+                    payload.get("text") or 
+                    payload.get("document") or 
+                    "No content"
+                )
+                
+                if score > 0.5:  # Chỉ lấy kết quả có score cao
+                    context.append(f"{idx}. [Score: {score:.2f}] {content}")
 
-            return "\n\n".join(context)
+            return "\n\n".join(context) if context else "No relevant matches found"
 
         except Exception as e:
             print(f"Pipeline error: {str(e)}")
             return f"Error: {str(e)}"
+
+    async def inlet(self, body: dict, user: Optional[dict] = None) -> dict:
+        """Pre-process incoming messages"""
+        try:
+            if "messages" in body:
+                last_message = body["messages"][-1]["content"]
+                print(f"Processing: {last_message}")
+                
+                query_vector = self.embeddings.embed_query(last_message)
+                results = self.search_vectors(query_vector)
+                
+                if "error" not in results:
+                    matches = results.get("result", [])
+                    if matches:
+                        context = []
+                        for idx, match in enumerate(matches, 1):
+                            score = float(match.get("score", 0))
+                            payload = match.get("payload", {})
+                            content = (
+                                payload.get("content") or 
+                                payload.get("text") or 
+                                payload.get("document") or 
+                                "No content"
+                            )
+                            if score > 0.5:
+                                context.append(f"{idx}. [Score: {score:.2f}] {content}")
+                                
+                        system_message = {
+                            "role": "system", 
+                            "content": "\n\n".join(context)
+                        }
+                        body["messages"].insert(0, system_message)
+                        
+            return body
+        except Exception as e:
+            print(f"Inlet error: {str(e)}")
+            return body
+
+    async def outlet(self, body: dict, user: Optional[dict] = None) -> dict:
+        """Post-process outgoing messages"""
+        return body
