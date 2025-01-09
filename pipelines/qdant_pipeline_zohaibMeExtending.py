@@ -12,7 +12,7 @@ import os
 import requests
 from typing import List, Union, Generator, Iterator
 from pydantic import BaseModel
-from langchain.embeddings import HuggingFaceInferenceAPIEmbeddings
+from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -29,19 +29,18 @@ class Pipeline:
     def __init__(self):
         self.valves = self.Valves(
             **{
-                "QDRANT_API_URL": os.getenv("QDRANT_API_URL", "https://your-qdrant-url"),
-                "QDRANT_API_KEY": os.getenv("QDRANT_API_KEY", "your-qdrant-api-key"),
-                "QDRANT_COLLECTION": os.getenv("QDRANT_COLLECTION", "your-collection-name"),
-                "HUGGINGFACE_API_KEY": os.getenv("HUGGINGFACE_API_KEY", "your-huggingface-api-key"),
-                "EMBEDDINGS_MODEL_NAME": os.getenv("EMBEDDINGS_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"),
+                "QDRANT_API_URL": os.getenv("QDRANT_API_URL"),
+                "QDRANT_API_KEY": os.getenv("QDRANT_API_KEY"),
+                "QDRANT_COLLECTION": os.getenv("QDRANT_COLLECTION"),
+                "HUGGINGFACE_API_KEY": os.getenv("HUGGINGFACE_API_KEY"),
+                "EMBEDDINGS_MODEL_NAME": os.getenv("EMBEDDINGS_MODEL_NAME"),
             }
         )
 
         # Initialize Hugging Face embeddings
         self.embeddings = HuggingFaceInferenceAPIEmbeddings(
-            model_name=self.valves.EMBEDDINGS_MODEL_NAME,
-            api_key=self.valves.HUGGINGFACE_API_KEY,
-            model_kwargs={'device': 'auto'}
+            api_key=os.getenv("HUGGINGFACE_API_KEY"),
+            model_name=os.getenv("EMBEDDINGS_MODEL_NAME")
         )
 
     async def on_startup(self):
