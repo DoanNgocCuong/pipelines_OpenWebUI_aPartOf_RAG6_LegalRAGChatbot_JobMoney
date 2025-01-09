@@ -16,6 +16,8 @@ from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 from qdrant_client import QdrantClient
 import requests
 import json
+from openai import OpenAI
+import asyncio
 
 load_dotenv()
 
@@ -27,6 +29,7 @@ class Pipeline:
         QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "<key trực tiếp>")
         HUGGINGFACE_API_KEY: str = os.getenv("HUGGINGFACE_API_KEY", "<key trực tiếp>")
         EMBEDDINGS_MODEL_NAME: str = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+        OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
     def __init__(self):
         self.name = "Qdrant RAG Pipeline"
@@ -53,6 +56,11 @@ class Pipeline:
                 timeout=10
             )
             print("Qdrant client initialized")
+
+            # Initialize OpenAI
+            print("Initializing OpenAI client with key:", self.valves.OPENAI_API_KEY[:10] + "...")
+            self.openai_client = OpenAI(api_key=self.valves.OPENAI_API_KEY)
+            print("OpenAI client initialized")
 
             # Verify collection
             collection_info = self.qdrant_client.get_collection(
@@ -113,45 +121,63 @@ class Pipeline:
             print(f"Search error: {str(e)}")
             return {"error": str(e)}
 
+    async def get_completion(self, messages: List[dict]) -> str:
+        """Get completion from OpenAI"""
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=2048
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"OpenAI error: {str(e)}")
+            return f"Error getting completion: {str(e)}"
+
     def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, Generator, Iterator]:
         """Process user message and return relevant context"""
         try:
             print(f"Processing: {user_message}")
             
-            # Generate embedding
+            # Generate embedding và search như cũ
             query_vector = self.embeddings.embed_query(user_message)
-            
-            # Search Qdrant
             results = self.search_vectors(query_vector)
+            
             if "error" in results:
                 return f"Search error: {results['error']}"
 
-            # Format results
             matches = results.get("result", [])
             if not matches:
-                return "No relevant information found"
+                return "Xin lỗi, tôi không tìm thấy thông tin liên quan đến câu hỏi của bạn"
 
-            # Debug response
-            print(f"Raw matches: {matches}")
-            
+            # Tạo context từ matches
             context = []
             for idx, match in enumerate(matches, 1):
-                # Kiểm tra cấu trúc payload
-                print(f"Match {idx} payload: {match}")
-                
                 score = float(match.get("score", 0))
-                payload = match.get("payload", {})
-                
-                # Thử các key khác nhau
-                content = (
-                    match.get("payload", {}).get("page_content") or 
-                    "No content cuong"
-                )
-                
-                if score > 0.5:  # Chỉ lấy kết quả có score cao
-                    context.append(f"{idx}. [Score: {score:.2f}] {content}")
+                content = match.get("payload", {}).get("page_content", "No content")
+                if score > 0.5:
+                    context.append(content)
 
-            return "\n\n".join(context) if context else "No relevant matches found"
+            # Tạo messages cho OpenAI
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "Bạn là trợ lý AI giúp trả lời các câu hỏi về luật giao thông. "
+                        "Hãy sử dụng thông tin sau để trả lời:\n\n" + 
+                        "\n\n".join(context)
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": user_message
+                }
+            ]
+
+            # Gọi OpenAI để xử lý
+            response = asyncio.run(self.get_completion(messages))
+            return response
 
         except Exception as e:
             print(f"Pipeline error: {str(e)}")
@@ -173,21 +199,21 @@ class Pipeline:
                         context = []
                         for idx, match in enumerate(matches, 1):
                             score = float(match.get("score", 0))
-                            payload = match.get("payload", {})
-                            content = (
-                                payload.get("page_content") or 
-                                payload.get("payload", {}).get("content") or 
-                                payload.get("payload", {}).get("text") or 
-                                payload.get("payload", {}).get("document") or 
-                                "No content"
-                            )
+                            content = match.get("payload", {}).get("page_content", "No content")
                             if score > 0.5:
-                                context.append(f"{idx}. [Score: {score:.2f}] {content}")
-                                
+                                context.append(f"{content}")
+                        
+                        # Tạo system message với context
                         system_message = {
-                            "role": "system", 
-                            "content": "\n\n".join(context)
+                            "role": "system",
+                            "content": (
+                                "Bạn là trợ lý AI giúp trả lời các câu hỏi về luật giao thông. "
+                                "Hãy sử dụng thông tin sau để trả lời:\n\n" + 
+                                "\n\n".join(context)
+                            )
                         }
+                        
+                        # Thêm system message vào đầu conversations
                         body["messages"].insert(0, system_message)
                         
             return body
