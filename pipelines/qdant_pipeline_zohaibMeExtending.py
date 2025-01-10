@@ -18,6 +18,7 @@ import requests
 import json
 from openai import OpenAI
 import asyncio
+from qdrant_client import QdrantClient, models
 
 load_dotenv()
 
@@ -138,28 +139,120 @@ class Pipeline:
     def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, Generator, Iterator]:
         """Process user message and return relevant context"""
         try:
-            print(f"Processing: {user_message}")
+            print(f"\n=== Starting pipeline execution ===")
+            print(f"Input message: {user_message}")
+            user_question = user_message.lower().strip()
             
-            # Generate embedding và search như cũ
-            query_vector = self.embeddings.embed_query(user_message)
+            # Debug: In ra một số points đầu tiên để kiểm tra cấu trúc
+            print("\n--- Debug: Checking collection structure ---")
+            points = self.qdrant_client.scroll(
+                collection_name=self.valves.QDRANT_COLLECTION,
+                limit=2,
+                with_payload=True,
+                with_vectors=False
+            )
+            print("Sample points from collection:")
+            for point in points[0]:
+                print(f"Point ID: {point.id}")
+                print(f"Payload: {point.payload}")
+                print("---")
+
+            # Bước 1: Thử tìm kiếm câu hỏi trùng khớp
+            try:
+                print("\n--- Step 1: Exact match search ---")
+                print("Creating embedding for question...")
+                query_vector = self.embeddings.embed_query(user_question)
+                print(f"Embedding created with size: {len(query_vector)}")
+                
+                print("\nTrying scroll method with debug...")
+                scroll_filter = models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="metadata.question",
+                            match=models.MatchValue(value=user_question)
+                        )
+                    ]
+                )
+                print(f"Filter condition: {scroll_filter}")
+                
+                scroll_results = self.qdrant_client.scroll(
+                    collection_name=self.valves.QDRANT_COLLECTION,
+                    scroll_filter=scroll_filter,
+                    limit=1,
+                    with_payload=True
+                )
+                print(f"Scroll results: {scroll_results}")
+                
+                if scroll_results and len(scroll_results[0]) > 0:
+                    match = scroll_results[0][0]
+                    print(f"Found exact match via scroll: {match.payload}")
+                    return match.payload.get('page_content', '')
+
+                # Thử tìm kiếm không có filter trước
+                print("\nTrying basic search without filter...")
+                basic_results = self.qdrant_client.search(
+                    collection_name=self.valves.QDRANT_COLLECTION,
+                    query_vector=query_vector,
+                    limit=1,
+                    with_payload=True
+                )
+                print(f"Basic search results: {basic_results}")
+
+                print("\nTrying search with filter...")
+                search_results = self.qdrant_client.search(
+                    collection_name=self.valves.QDRANT_COLLECTION,
+                    query_vector=query_vector,
+                    query_filter=scroll_filter,
+                    limit=1,
+                    with_payload=True
+                )
+                print(f"Filtered search results: {search_results}")
+                
+                if search_results and len(search_results) > 0:
+                    match = search_results[0]
+                    print(f"Found exact match via search: {match.payload}")
+                    return match.payload.get('page_content', '')
+                    
+            except Exception as e:
+                print(f"\nError in exact match search:")
+                print(f"Error type: {type(e).__name__}")
+                print(f"Error message: {str(e)}")
+                print(f"Full error: {e}")
+
+            # Bước 2: Nếu không tìm được kết quả trùng khớp
+            print("\n--- Step 2: Semantic search ---")
+            print("No exact match found, proceeding to semantic search...")
             results = self.search_vectors(query_vector)
             
             if "error" in results:
                 return f"Search error: {results['error']}"
 
             matches = results.get("result", [])
+            if matches:
+                for match in matches:
+                    score = float(match.get("score", 0))
+                    payload = match.get("payload", {})
+                    metadata = payload.get('metadata', {})
+                    
+                    # Trả về kết quả nếu độ tương đồng cao
+                    if score >= 0.8 and "page_content" in payload:
+                        return (
+                            f"Câu trả lời từ tài liệu: {payload['page_content']} "
+                            f"(Nguồn: {metadata.get('source', 'Không rõ')}, "
+                            f"Câu hỏi gốc: {metadata.get('question', 'Không rõ')})"
+                        )
+
+            # Bước 3: Xử lý với OpenAI nếu không tìm được kết quả phù hợp
             if not matches:
                 return "Xin lỗi, tôi không tìm thấy thông tin liên quan đến câu hỏi của bạn"
 
-            # Tạo context từ matches
             context = []
-            for idx, match in enumerate(matches, 1):
+            for match in matches:
                 score = float(match.get("score", 0))
                 content = match.get("payload", {}).get("page_content", "No content")
                 if score > 0.5:
                     context.append(content)
 
-            # Tạo messages cho OpenAI
             messages = [
                 {
                     "role": "system",
@@ -175,7 +268,6 @@ class Pipeline:
                 }
             ]
 
-            # Gọi OpenAI để xử lý
             response = asyncio.run(self.get_completion(messages))
             return response
 
