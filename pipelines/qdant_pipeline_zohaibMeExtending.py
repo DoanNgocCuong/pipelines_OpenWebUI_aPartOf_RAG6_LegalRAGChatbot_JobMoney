@@ -141,9 +141,8 @@ class Pipeline:
         try:
             print(f"\n=== Starting pipeline execution ===")
             print(f"Input message: {user_message}")
-            user_question = user_message.strip()
             
-            # Debug: In ra một số points đầu tiên để kiểm tra cấu trúc
+            # Debug: In ra cấu trúc collection
             print("\n--- Debug: Checking collection structure ---")
             points = self.qdrant_client.scroll(
                 collection_name=self.valves.QDRANT_COLLECTION,
@@ -157,19 +156,14 @@ class Pipeline:
                 print(f"Payload: {point.payload}")
                 print("---")
 
-            # Bước 1: Thử tìm kiếm câu hỏi trùng khớp
+            # Bước 1: Thử tìm kiếm câu hỏi trùng khớp bằng scroll method
             try:
-                print("\n--- Step 1: Exact match search ---")
-                print("Creating embedding for question...")
-                query_vector = self.embeddings.embed_query(user_question)
-                print(f"Embedding created with size: {len(query_vector)}")
-                
-                print("\nTrying scroll method with debug...")
+                print("\n--- Step 1: Text search with scroll method ---")
                 scroll_filter = models.Filter(
                     must=[
                         models.FieldCondition(
                             key="metadata.question",
-                            match=models.MatchValue(value=user_question)
+                            match=models.MatchValue(value=user_message)
                         )
                     ]
                 )
@@ -185,44 +179,22 @@ class Pipeline:
                 
                 if scroll_results and len(scroll_results[0]) > 0:
                     match = scroll_results[0][0]
-                    print(f"Found exact match via scroll: {match.payload}")
+                    print(f"Found exact match: {match.payload.get('metadata.question', '')}")
                     return match.payload.get('page_content', '')
 
-                # Thử tìm kiếm không có filter trước
-                print("\nTrying basic search without filter...")
-                basic_results = self.qdrant_client.search(
-                    collection_name=self.valves.QDRANT_COLLECTION,
-                    query_vector=query_vector,
-                    limit=1,
-                    with_payload=True
-                )
-                print(f"Basic search results: {basic_results}")
-
-                print("\nTrying search with filter...")
-                search_results = self.qdrant_client.search(
-                    collection_name=self.valves.QDRANT_COLLECTION,
-                    query_vector=query_vector,
-                    query_filter=scroll_filter,
-                    limit=1,
-                    with_payload=True
-                )
-                print(f"Filtered search results: {search_results}")
-                
-                if search_results and len(search_results) > 0:
-                    match = search_results[0]
-                    print(f"Found exact match via search: {match.payload}")
-                    return match.payload.get('page_content', '')
-                    
             except Exception as e:
-                print(f"\nError in exact match search:")
+                print(f"\nError in scroll search:")
                 print(f"Error type: {type(e).__name__}")
                 print(f"Error message: {str(e)}")
-                print(f"Full error: {e}")
 
-            # Bước 2: Nếu không tìm được kết quả trùng khớp
+            # Bước 2: Nếu không tìm được kết quả, thử semantic search
             print("\n--- Step 2: Semantic search ---")
-            print("No exact match found, proceeding to semantic search...")
+            print("Creating embedding for semantic search...")
+            query_vector = self.embeddings.embed_query(user_message)
+            print(f"Embedding created with size: {len(query_vector)}")
+            
             results = self.search_vectors(query_vector)
+            print("Semantic search completed")
             
             if "error" in results:
                 return f"Search error: {results['error']}"
