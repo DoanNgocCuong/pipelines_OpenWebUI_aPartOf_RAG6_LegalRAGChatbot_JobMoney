@@ -141,7 +141,7 @@ class Pipeline:
         try:
             print(f"\n=== Starting pipeline execution ===")
             print(f"Input message: {user_message}")
-            user_question = user_message.lower().strip()
+            user_question = user_message.strip()
             
             # Debug: In ra một số points đầu tiên để kiểm tra cấu trúc
             print("\n--- Debug: Checking collection structure ---")
